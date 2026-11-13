@@ -6,6 +6,7 @@ import 'package:daruma_kanji/components/daruma/daruma_mesh.dart';
 import 'package:daruma_kanji/components/daruma/daruma_orbit_painter.dart';
 import 'package:daruma_kanji/components/daruma/daruma_orbit_view.dart';
 import 'package:daruma_kanji/components/daruma/daruma_surface.dart';
+import 'package:daruma_kanji/components/daruma/daruma_push.dart';
 import 'package:daruma_kanji/models/daruma_model.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -78,6 +79,69 @@ Future<void> captureTurntable(DarumaSurface surface) async {
   }
 }
 
+Future<void> capturePushes(DarumaSurface surface) async {
+  final folder = Directory('build/design-preview/push')
+    ..createSync(recursive: true);
+  const viewport = Size(400, 440);
+  final rest = DarumaCamera(pitch: 0.10);
+  final scenarios = [
+    (label: 'Đẩy bên trái', point: const Offset(112, 185)),
+    (label: 'Đẩy bên phải', point: const Offset(288, 185)),
+    (label: 'Đẩy giữa mặt', point: const Offset(200, 155)),
+  ];
+  for (var scenario = 0; scenario < scenarios.length; scenario++) {
+    final contact = scenarios[scenario];
+    final impulse = DarumaPushImpulse.pick(rest, viewport, contact.point)!;
+    final motion = DarumaPushMotion(impulse: impulse);
+    for (var frame = 0; frame < 36; frame++) {
+      final elapsed = frame / 12;
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder)
+        ..drawColor(const Color(0xFFF9F6F0), BlendMode.src);
+      DarumaOrbitPainter(
+              surface: surface,
+              camera: DarumaCamera(
+                  pitch: rest.pitch,
+                  roll: motion.rollAt(elapsed),
+                  rock: motion.rockAt(elapsed)))
+          .paint(canvas, viewport);
+      if (frame < 4) {
+        canvas.drawCircle(
+            contact.point,
+            11,
+            Paint()
+              ..color = const Color(0xFFC7241D)
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 2);
+        canvas.drawCircle(
+            contact.point, 4, Paint()..color = const Color(0xFFC7241D));
+      }
+      final label = TextPainter(
+          text: TextSpan(
+              text: contact.label,
+              style: const TextStyle(
+                  fontFamily: 'DarumaSans',
+                  fontSize: 18,
+                  color: Color(0xFF750B0A))),
+          textDirection: TextDirection.ltr)
+        ..layout();
+      label.paint(canvas, Offset((viewport.width - label.width) / 2, 404));
+      label.dispose();
+      final picture = recorder.endRecording();
+      final image = await picture.toImage(400, 440);
+      picture.dispose();
+      final png = (await image.toByteData(format: ui.ImageByteFormat.png))!
+          .buffer
+          .asUint8List();
+      image.dispose();
+      File('${folder.path}/frame-${(scenario * 36 + frame).toString().padLeft(3, '0')}.png')
+          .writeAsBytesSync(png);
+      if (frame == 3)
+        File('${folder.path}/push-$scenario.png').writeAsBytesSync(png);
+    }
+  }
+}
+
 int difference(Uint8List a, Uint8List b) {
   var changed = 0;
   for (var i = 0; i < a.length; i += 4) {
@@ -95,6 +159,7 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(() async {
     for (final entry in {
+      'DarumaSans': 'assets/fonts/Roboto-Regular.ttf',
       'DarumaMincho': 'assets/fonts/ShipporiMincho-ExtraBold.ttf',
       'MaterialIcons': 'fonts/MaterialIcons-Regular.otf',
     }.entries) {
@@ -124,7 +189,10 @@ void main() {
       expect(opaque, greaterThan(20000),
           reason: 'No culling holes or vanished body');
     }
-    if (capture) await captureTurntable(surface);
+    if (capture) {
+      await captureTurntable(surface);
+      await capturePushes(surface);
+    }
   });
 
   test('3D surface retains eye rituals and invalidates a mutated model',
@@ -177,6 +245,88 @@ void main() {
     expect(tester.hasRunningAnimations, isFalse);
   });
 
+  testWidgets(
+      'Opposite flank taps lean away from the finger with a stronger wobble',
+      (tester) async {
+    final doll = DarumaModel.defaultLevels().first;
+    final surface = (await tester.runAsync(() => DarumaSurface.create(doll)))!;
+    addTearDown(surface.dispose);
+    await tester.pumpWidget(MaterialApp(
+        home: Center(
+            child:
+                DarumaOrbitView(daruma: doll, size: 300, surface: surface))));
+    final region =
+        tester.getRect(find.byKey(const ValueKey('daruma-orbit-gesture')));
+    await tester.tapAt(Offset(
+        region.left + region.width * 0.28, region.top + region.height * 0.42));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 130));
+    final leftPush = cameraOf(tester).roll;
+    await tester.tap(find.byTooltip('Mặt trước'));
+    await tester.pumpAndSettle();
+    await tester.tapAt(Offset(
+        region.left + region.width * 0.72, region.top + region.height * 0.42));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 130));
+    final rightPush = cameraOf(tester).roll;
+    expect(leftPush, lessThan(-0.12),
+        reason: 'Left push must tilt right, beyond the old 0.09 rad');
+    expect(rightPush, greaterThan(0.12), reason: 'Right push must tilt left');
+    await tester.pumpAndSettle();
+    expect(cameraOf(tester).roll, closeTo(0, 0.001));
+    expect(tester.hasRunningAnimations, isFalse);
+  });
+
+  testWidgets('A center push rocks in depth without changing the chosen orbit',
+      (tester) async {
+    final doll = DarumaModel.defaultLevels().first;
+    final surface = (await tester.runAsync(() => DarumaSurface.create(doll)))!;
+    addTearDown(surface.dispose);
+    await tester.pumpWidget(MaterialApp(
+        home: Center(
+            child:
+                DarumaOrbitView(daruma: doll, size: 300, surface: surface))));
+    final region = find.byKey(const ValueKey('daruma-orbit-gesture'));
+    await tester.drag(region, const Offset(70, 20));
+    await tester.pumpAndSettle();
+    final before = cameraOf(tester);
+    await tester.tapAt(tester.getRect(region).topLeft + const Offset(150, 140));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 150));
+    expect(cameraOf(tester).rock, lessThan(-0.15));
+    expect(cameraOf(tester).yaw, closeTo(before.yaw, 0.000001));
+    expect(cameraOf(tester).pitch, closeTo(before.pitch, 0.000001));
+    await tester.pumpAndSettle();
+    expect(cameraOf(tester).rock, 0);
+    expect(cameraOf(tester).roll, 0);
+    expect(cameraOf(tester).yaw, closeTo(before.yaw, 0.000001));
+    expect(tester.hasRunningAnimations, isFalse);
+  });
+
+  testWidgets(
+      'Background taps do not push and dragging does not trigger a tap spring',
+      (tester) async {
+    final doll = DarumaModel.defaultLevels().first;
+    final surface = (await tester.runAsync(() => DarumaSurface.create(doll)))!;
+    addTearDown(surface.dispose);
+    await tester.pumpWidget(MaterialApp(
+        home: Center(
+            child:
+                DarumaOrbitView(daruma: doll, size: 300, surface: surface))));
+    final region = find.byKey(const ValueKey('daruma-orbit-gesture'));
+    await tester.tapAt(tester.getRect(region).topLeft + const Offset(3, 3));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(tester.hasRunningAnimations, isFalse);
+    expect(cameraOf(tester).roll, 0);
+    expect(cameraOf(tester).rock, 0);
+    await tester.drag(region, const Offset(80, 20));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(cameraOf(tester).yaw.abs(), greaterThan(0.5));
+    expect(cameraOf(tester).roll, 0);
+    expect(cameraOf(tester).rock, 0);
+    expect(tester.hasRunningAnimations, isFalse);
+  });
+
   testWidgets('Reduced motion permits deliberate orbit but skips tap wobble',
       (tester) async {
     final doll = DarumaModel.defaultLevels().first;
@@ -190,6 +340,7 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('daruma-orbit-gesture')));
     await tester.pump(const Duration(milliseconds: 100));
     expect(cameraOf(tester).roll, 0);
+    expect(cameraOf(tester).rock, 0);
     expect(tester.hasRunningAnimations, isFalse);
     await tester.drag(find.byKey(const ValueKey('daruma-orbit-gesture')),
         const Offset(80, 0));
@@ -285,6 +436,7 @@ void main() {
     await tester.pump();
     expect(tester.hasRunningAnimations, isFalse);
     expect(cameraOf(tester).roll, 0);
+    expect(cameraOf(tester).rock, 0);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     await tester.pump();
     expect(tester.hasRunningAnimations, isFalse);

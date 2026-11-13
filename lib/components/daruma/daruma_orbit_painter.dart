@@ -6,7 +6,7 @@ import 'daruma_mesh.dart';
 import 'daruma_surface.dart';
 
 /// Real mesh projection, hidden-surface culling and smooth vertex lighting.
-/// The doll is convex: front-face culling removes all occluded triangles,
+/// The doll is convex: back-face culling removes all occluded triangles,
 /// allowing a single textured draw without a general-purpose depth buffer.
 class DarumaOrbitPainter extends CustomPainter {
   final DarumaSurface surface;
@@ -22,15 +22,15 @@ class DarumaOrbitPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final scale = math.min(size.width, size.height / 1.1) * 0.37;
     final positions = Float32List(_mesh.vertices.length * 2);
     final colors = Int32List(_mesh.vertices.length);
     final highlights = Int32List(_mesh.vertices.length);
     for (var i = 0; i < _mesh.vertices.length; i++) {
       final vertex = _mesh.vertices[i];
-      final p = camera.project(vertex.position);
-      positions[i * 2] = size.width / 2 + p.x * scale;
-      positions[i * 2 + 1] = size.height * 0.48 + p.y * scale;
+      final p =
+          DarumaCamera.viewportPosition(camera.project(vertex.position), size);
+      positions[i * 2] = p.dx;
+      positions[i * 2 + 1] = p.dy;
       final n = camera.transform(vertex.normal, direction: true);
       final diffuse = 0.62 + 0.38 * math.max(0, n.dot(_light));
       final value = (255 * diffuse).round().clamp(0, 255);
@@ -50,9 +50,12 @@ class DarumaOrbitPainter extends CustomPainter {
               (positions[c * 2] - positions[a * 2]);
       if (area < -0.00001) visible.addAll([a, b, c]);
     }
+    final floor = DarumaCamera(pitch: camera.pitch, zoom: camera.zoom);
+    final contact = DarumaCamera.viewportPosition(
+        floor.project(Point3(0, DarumaMesh.bottom, 0)), size);
     canvas.drawOval(
         Rect.fromCenter(
-            center: Offset(size.width / 2, size.height * 0.88),
+            center: contact + const Offset(0, 7),
             width: size.width * 0.56 * camera.zoom,
             height: size.height * 0.035),
         Paint()

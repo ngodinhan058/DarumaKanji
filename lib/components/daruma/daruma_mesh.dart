@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:ui' show Offset, Size;
 
 class Point3 {
   final double x, y, z;
@@ -79,32 +80,66 @@ class DarumaMesh {
 
 /// CPU camera transforms only; Flutter rasterizes the textured triangles.
 class DarumaCamera {
-  final double yaw, pitch, zoom, roll;
+  final double yaw, pitch, zoom, roll, rock;
+  static const distance = 5.2;
   DarumaCamera(
-      {double yaw = 0, double pitch = 0, double zoom = 1, double roll = 0})
+      {double yaw = 0,
+      double pitch = 0,
+      double zoom = 1,
+      double roll = 0,
+      double rock = 0})
       : yaw = yaw.isFinite ? (yaw + math.pi) % (2 * math.pi) - math.pi : 0,
         pitch = pitch.isFinite ? pitch.clamp(-0.65, 0.8) : 0,
         zoom = zoom.isFinite ? zoom.clamp(0.8, 1.35) : 1,
-        roll = roll.isFinite ? roll.clamp(-0.3, 0.3) : 0;
+        roll = roll.isFinite ? roll.clamp(-0.65, 0.65) : 0,
+        rock = rock.isFinite ? rock.clamp(-0.65, 0.65) : 0;
 
   late final _cy = math.cos(yaw), _sy = math.sin(yaw);
   late final _cp = math.cos(pitch), _sp = math.sin(pitch);
   late final _cr = math.cos(roll), _sr = math.sin(roll);
+  late final _ck = math.cos(rock), _sk = math.sin(rock);
+
+  // Lift the tilted convex body just enough for its rounded base to keep
+  // touching the floor. Axisymmetry lets us check only the 29 profile rings.
+  late final double _lift = _floorLift();
+  double _floorLift() {
+    if (roll == 0 && rock == 0) return 0;
+    final vertical = _cr * _ck;
+    final horizontal = math.sqrt(math.max(0, 1 - vertical * vertical));
+    var lowest = DarumaMesh.bottom;
+    for (var row = 0; row <= DarumaMesh.rings; row++) {
+      final p = DarumaMesh
+          .standard.vertices[row * (DarumaMesh.segments + 1)].position;
+      lowest = math.min(
+          lowest,
+          DarumaMesh.bottom +
+              (p.y - DarumaMesh.bottom) * vertical -
+              p.z.abs() * horizontal);
+    }
+    return DarumaMesh.bottom - lowest;
+  }
 
   Point3 transform(Point3 p, {bool direction = false}) {
     final x = p.x * _cy + p.z * _sy;
     final z = -p.x * _sy + p.z * _cy;
-    final y = p.y * _cp - z * _sp;
-    final depth = p.y * _sp + z * _cp;
     final pivotY = direction ? 0 : DarumaMesh.bottom;
-    return Point3(x * _cr - (y - pivotY) * _sr,
-        x * _sr + (y - pivotY) * _cr + pivotY, depth);
+    final rolledX = x * _cr - (p.y - pivotY) * _sr;
+    final rolledY = x * _sr + (p.y - pivotY) * _cr;
+    final y = rolledY * _ck - z * _sk + pivotY + (direction ? 0 : _lift);
+    final depth = rolledY * _sk + z * _ck;
+    return Point3(rolledX, y * _cp - depth * _sp, y * _sp + depth * _cp);
   }
 
   Point3 project(Point3 p) => projectTransformed(transform(p));
 
   Point3 projectTransformed(Point3 p) {
-    final perspective = 5.2 / (5.2 - p.z);
+    final perspective = distance / (distance - p.z);
     return Point3(p.x * perspective * zoom, -p.y * perspective * zoom, p.z);
+  }
+
+  static Offset viewportPosition(Point3 projected, Size viewport) {
+    final scale = math.min(viewport.width, viewport.height / 1.1) * 0.37;
+    return Offset(viewport.width / 2 + projected.x * scale,
+        viewport.height * 0.48 + projected.y * scale);
   }
 }

@@ -2,13 +2,13 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
-import 'package:flutter/physics.dart';
 import 'package:flutter/services.dart';
 import '../../core/theme/app_colors.dart';
 import '../../models/daruma_model.dart';
 import 'daruma_3d_painter.dart';
 import 'daruma_mesh.dart';
 import 'daruma_orbit_painter.dart';
+import 'daruma_push.dart';
 import 'daruma_surface.dart';
 
 class DarumaOrbitView extends StatefulWidget {
@@ -27,6 +27,7 @@ class DarumaOrbitView extends StatefulWidget {
 class _DarumaOrbitViewState extends State<DarumaOrbitView>
     with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   late final AnimationController _spring;
+  DarumaPushMotion? _pushMotion;
   DarumaCamera _camera = DarumaCamera(pitch: 0.10);
   DarumaSurface? _surface;
   bool _ownsSurface = false, _failed = false, _reduceMotion = false;
@@ -41,13 +42,21 @@ class _DarumaOrbitViewState extends State<DarumaOrbitView>
     WidgetsBinding.instance.addObserver(this);
     _spring = AnimationController.unbounded(vsync: this)
       ..addListener(() {
+        final motion = _pushMotion;
+        if (motion == null) return;
         setState(() {
           _camera = DarumaCamera(
               yaw: _camera.yaw,
               pitch: _camera.pitch,
               zoom: _camera.zoom,
-              roll: _spring.value);
+              roll: motion.rollAt(_spring.value),
+              rock: motion.rockAt(_spring.value));
         });
+      })
+      ..addStatusListener((status) {
+        if (status == AnimationStatus.completed && _pushMotion != null) {
+          setState(_stopWobble);
+        }
       });
     _loadSurface();
   }
@@ -104,23 +113,31 @@ class _DarumaOrbitViewState extends State<DarumaOrbitView>
 
   void _stopWobble() {
     _spring.stop();
+    _pushMotion = null;
     _camera = DarumaCamera(
         yaw: _camera.yaw, pitch: _camera.pitch, zoom: _camera.zoom);
   }
 
-  void _tap() {
-    HapticFeedback.selectionClick();
+  void _tapAt(Offset position) {
+    final impulse = DarumaPushImpulse.pick(
+        _camera, Size(widget.size, widget.size * 1.1), position);
+    if (impulse == null) return;
+    HapticFeedback.lightImpact();
     if (_reduceMotion) return;
-    _spring.animateWith(SpringSimulation(
-      const SpringDescription(mass: 1, stiffness: 100, damping: 9),
-      0.09,
-      0,
-      -0.15,
-    ));
+    final previous = _pushMotion;
+    final elapsed = _spring.value;
+    final motion = DarumaPushMotion(
+        roll: _camera.roll,
+        rock: _camera.rock,
+        rollVelocity: previous?.rollVelocityAt(elapsed) ?? 0,
+        rockVelocity: previous?.rockVelocityAt(elapsed) ?? 0,
+        impulse: impulse);
+    _pushMotion = motion;
+    _spring.animateWith(motion);
   }
 
   void _reset() {
-    _spring.stop();
+    _stopWobble();
     setState(() => _camera = DarumaCamera(pitch: 0.10));
   }
 
@@ -188,7 +205,9 @@ class _DarumaOrbitViewState extends State<DarumaOrbitView>
         hint: 'Kéo để xoay, chụm hai ngón tay để phóng to.',
         onIncrease: () => _turn(math.pi / 6),
         onDecrease: () => _turn(-math.pi / 6),
-        onTap: _tap,
+        onTap: ready
+            ? () => _tapAt(Offset(widget.size / 2, widget.size * 0.5))
+            : null,
         // A scale recognizer normally waits twice as far as the parent's
         // vertical-scroll recognizer. Give orbit drags an earlier threshold
         // inside this region only; outside it the page keeps normal scrolling.
@@ -203,7 +222,8 @@ class _DarumaOrbitViewState extends State<DarumaOrbitView>
               behavior: HitTestBehavior.opaque,
               onScaleStart: ready ? _start : null,
               onScaleUpdate: ready ? _update : null,
-              onTap: ready ? _tap : null,
+              onTapUp:
+                  ready ? (details) => _tapAt(details.localPosition) : null,
               child: SizedBox(
                   width: widget.size,
                   height: widget.size * 1.1,
