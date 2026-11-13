@@ -1,0 +1,37 @@
+name: daruma_kanji
+description: "Daruma's Vow - Ung dung hoc Kanji Nhat Ban ket hop triet ly lat dat va he thong lap lai ngat quang SRS"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # Smooth micro-animations
+  flutter_animate: ^4.5.0
+  # Icons & Fonts
+  google_fonts: ^6.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+  fonts:
+    - family: DarumaSans
+      fonts:
+        - asset: assets/fonts/Roboto-Regular.ttf
+        - asset: assets/fonts/Roboto-Bold.ttf
+          weight: 700
+    - family: DarumaMincho
+      fonts:
+        - asset: assets/fonts/ShipporiMincho-ExtraBold.ttf
+          weight: 800
+  # assets:
+  #   - assets/images/
+  #   - assets/audio/
+
